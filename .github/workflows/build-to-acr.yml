@@ -1,7 +1,7 @@
-name: Build and Push to ACR
+name: Build-Push-Deploy to ACA
 
 on:
-  workflow_dispatch:   # allow manual trigger
+  workflow_dispatch:
   push:
     branches: [ main ]
     paths:
@@ -9,7 +9,7 @@ on:
       - app.py
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,10 +21,23 @@ jobs:
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
-      - name: Build and push image
+      - name: Build & push image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: dockerfile
           push: true
           tags: ${{ secrets.ACR_LOGIN_SERVER }}/totalseg-api:latest
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          acrName: totalsegacr
+          containerAppName: totalseg-app
+          resourceGroup: my-resource-group
+          imageToDeploy: ${{ secrets.ACR_LOGIN_SERVER }}/totalseg-api:latest
