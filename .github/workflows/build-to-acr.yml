@@ -25,7 +25,9 @@ jobs:
           az acr build \
             --registry totalsegacr \
             --image totalseg-api:${TAG} \
+            --file dockerfile \
             .
+
 
       - name: Update Container App image
         run: |
