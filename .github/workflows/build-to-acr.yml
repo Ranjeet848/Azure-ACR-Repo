@@ -1,43 +1,39 @@
-name: Build-Push-Deploy to ACA
+# .github/workflows/build-to-acr.yml
+name: Build & Deploy to ACA
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main ]
-    paths:
-      - dockerfile
-      - app.py
+    branches: [ "main" ]
 
 jobs:
-  build-and-deploy:
+  build-push:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to ACR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.ACR_LOGIN_SERVER }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
-
-      - name: Build & push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: dockerfile
-          push: true
-          tags: ${{ secrets.ACR_LOGIN_SERVER }}/totalseg-api:latest
-
-      - name: Login to Azure
+      - name: Azure login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy to Azure Container Apps
-        uses: azure/container-apps-deploy-action@v1
-        with:
-          acrName: totalsegacr
-          containerAppName: totalseg-app
-          resourceGroup: my-resource-group
-          imageToDeploy: ${{ secrets.ACR_LOGIN_SERVER }}/totalseg-api:latest
+      - name: Login to ACR
+        run: az acr login --name totalsegacr
+
+      - name: Build & push image
+        run: |
+          TAG=${{ github.sha }}
+          az acr build \
+            --registry totalsegacr \
+            --image totalseg-api:${TAG} \
+            .
+
+      - name: Update Container App image
+        run: |
+          TAG=${{ github.sha }}
+          az containerapp update \
+            -g my-resource-group \
+            -n totalseg-app \
+            --image totalsegacr.azurecr.io/totalseg-api:${TAG}
+
+      - name: Show latest revision
+        run: az containerapp revision list -g my-resource-group -n totalseg-app -o table
