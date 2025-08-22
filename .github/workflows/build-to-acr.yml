@@ -1,41 +1,67 @@
-# .github/workflows/build-to-acr.yml
-name: Build & Deploy to ACA
+name: Build & Deploy to Azure Container Apps
 
 on:
   push:
     branches: [ "main" ]
 
-jobs:
-  build-push:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+# Optional: avoid overlapping runs on main
+concurrency:
+  group: build-deploy-main
+  cancel-in-progress: true
 
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Login with a Service Principal JSON stored in repo secrets as AZURE_CREDENTIALS
+      # (Make sure the SP has AcrPush on 'totalsegacr' and permissions to update Container Apps in the RG)
       - name: Azure login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Login to ACR
-        run: az acr login --name totalsegacr
-
-      - name: Build & push image
+      - name: Ensure Container Apps extension is available
         run: |
-          TAG=${{ github.sha }}
+          az extension add --name containerapp --upgrade
+          az provider register --namespace Microsoft.App --wait
+          az provider register --namespace Microsoft.OperationalInsights --wait
+
+      # Build in ACR from the repo root. Expects a file named 'Dockerfile' at the root.
+      - name: Build & push image to ACR
+        env:
+          REGISTRY_NAME: totalsegacr
+          IMAGE_NAME: totalseg-api
+          TAG: ${{ github.sha }}
+        run: |
           az acr build \
-            --registry totalsegacr \
-            --image totalseg-api:${TAG} \
-            --file dockerfile \
+            --registry $REGISTRY_NAME \
+            --image ${IMAGE_NAME}:${TAG} \
+            --file Dockerfile \
             .
 
-
-      - name: Update Container App image
+      # Update the Container App to use the freshly built image tag
+      - name: Deploy to Azure Container Apps
+        env:
+          RESOURCE_GROUP: my-resource-group
+          CONTAINER_APP: totalseg-app
+          REGISTRY_LOGIN_SERVER: totalsegacr.azurecr.io
+          IMAGE_NAME: totalseg-api
+          TAG: ${{ github.sha }}
         run: |
-          TAG=${{ github.sha }}
-          az containerapp update \
-            -g my-resource-group \
-            -n totalseg-app \
-            --image totalsegacr.azurecr.io/totalseg-api:${TAG}
+          # (Optional but helpful during recovery) ensure single-revision mode so only latest runs
+          az containerapp revision set-mode \
+            -g "$RESOURCE_GROUP" \
+            -n "$CONTAINER_APP" \
+            --mode single
 
-      - name: Show latest revision
-        run: az containerapp revision list -g my-resource-group -n totalseg-app -o table
+          az containerapp update \
+            -g "$RESOURCE_GROUP" \
+            -n "$CONTAINER_APP" \
+            --image ${REGISTRY_LOGIN_SERVER}/${IMAGE_NAME}:${TAG}
+
+          echo "Deployed image: ${REGISTRY_LOGIN_SERVER}/${IMAGE_NAME}:${TAG}"
+          az containerapp revision list -g "$RESOURCE_GROUP" -n "$CONTAINER_APP" -o table
